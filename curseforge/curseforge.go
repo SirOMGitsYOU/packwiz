@@ -176,6 +176,11 @@ func createModFile(modInfo modInfo, fileInfo modFileInfo, index *core.Index, opt
 		return err
 	}
 
+	u, err := core.ReencodeURL(fileInfo.DownloadURL)
+	if err != nil {
+		return err
+	}
+
 	hash, hashFormat := fileInfo.getBestHash()
 
 	var optional *core.ModOption
@@ -193,6 +198,7 @@ func createModFile(modInfo modInfo, fileInfo modFileInfo, index *core.Index, opt
 		Download: core.ModDownload{
 			HashFormat: hashFormat,
 			Hash:       hash,
+			URL:        u,
 		},
 		Option: optional,
 		Update: updateMap,
@@ -420,10 +426,16 @@ func (u cfUpdater) DoUpdate(mods []*core.Mod, cachedState []interface{}) error {
 			}
 		}
 
+		u, err := core.ReencodeURL(fileInfoData.DownloadURL)
+		if err != nil {
+			return err
+		}
+
 		v.FileName = fileInfoData.FileName
 		v.Name = modState.Name
 		hash, hashFormat := fileInfoData.getBestHash()
 		v.Download = core.ModDownload{
+			URL:        u,
 			HashFormat: hashFormat,
 			Hash:       hash,
 		}

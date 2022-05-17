@@ -15,10 +15,10 @@ import (
 
 // TODO: update everything for no URL and download mode "metadata:curseforge"
 
-const cfApiServer = "api.curseforge.com"
+const cfApiServer = "api-pocket.com"
 
 // If you fork/derive from packwiz, I request that you obtain your own API key.
-const cfApiKeyDefault = "JDJhJDEwJHNBWVhqblU1N0EzSmpzcmJYM3JVdk92UWk2NHBLS3BnQ2VpbGc1TUM1UGNKL0RYTmlGWWxh"
+const cfApiKeyDefault = "filler"
 
 // Exists so you can provide it as a build parameter: -ldflags="-X 'github.com/packwiz/packwiz/curseforge.cfApiKey=key'"
 var cfApiKey = ""
