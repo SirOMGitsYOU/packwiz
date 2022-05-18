@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/packwiz/packwiz/core"
+	"github.com/wafflecoffee/packwiz/core"
 	"github.com/spf13/cobra"
 	"golang.org/x/exp/slices"
 )

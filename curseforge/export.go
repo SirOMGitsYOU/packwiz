@@ -4,13 +4,13 @@ import (
 	"archive/zip"
 	"bufio"
 	"fmt"
-	"github.com/packwiz/packwiz/curseforge/packinterop"
+	"github.com/wafflecoffee/packwiz/curseforge/packinterop"
 	"github.com/spf13/viper"
 	"os"
 	"path/filepath"
 	"strconv"
 
-	"github.com/packwiz/packwiz/core"
+	"github.com/wafflecoffee/packwiz/core"
 	"github.com/spf13/cobra"
 )
 

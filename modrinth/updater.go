@@ -4,7 +4,7 @@ import (
 	"errors"
 
 	"github.com/mitchellh/mapstructure"
-	"github.com/packwiz/packwiz/core"
+	"github.com/wafflecoffee/packwiz/core"
 )
 
 type mrUpdateData struct {

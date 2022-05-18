@@ -20,7 +20,7 @@ const cfApiServer = "api-pocket.com"
 // If you fork/derive from packwiz, I request that you obtain your own API key.
 const cfApiKeyDefault = "filler"
 
-// Exists so you can provide it as a build parameter: -ldflags="-X 'github.com/packwiz/packwiz/curseforge.cfApiKey=key'"
+// Exists so you can provide it as a build parameter: -ldflags="-X 'github.com/wafflecoffee/packwiz/curseforge.cfApiKey=key'"
 var cfApiKey = ""
 
 func decodeDefaultKey() string {
@@ -44,7 +44,7 @@ func (c *cfApiClient) makeGet(endpoint string) (*http.Response, error) {
 	}
 
 	// TODO: make this configurable application-wide
-	req.Header.Set("User-Agent", "packwiz/packwiz client")
+	req.Header.Set("User-Agent", "wafflecoffee/packwiz client")
 	req.Header.Set("Accept", "application/json")
 	if cfApiKey == "" {
 		cfApiKey = decodeDefaultKey()
@@ -69,7 +69,7 @@ func (c *cfApiClient) makePost(endpoint string, body io.Reader) (*http.Response,
 	}
 
 	// TODO: make this configurable application-wide
-	req.Header.Set("User-Agent", "packwiz/packwiz client")
+	req.Header.Set("User-Agent", "wafflecoffee/packwiz client")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
 	if cfApiKey == "" {
@@ -146,7 +146,7 @@ func modIDFromSlug(slug string) (int, error) {
 	}
 
 	// TODO: make this configurable application-wide
-	req.Header.Set("User-Agent", "packwiz/packwiz client")
+	req.Header.Set("User-Agent", "wafflecoffee/packwiz client")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
 
