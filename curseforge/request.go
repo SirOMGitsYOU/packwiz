@@ -200,6 +200,14 @@ const (
 	modloaderTypeFabric
 )
 
+var modloaderNames = [...]string{
+	"",
+	"Forge",
+	"Cauldron",
+	"Liteloader",
+	"Fabric",
+}
+
 //noinspection GoUnusedConst
 const (
 	hashAlgoSHA1 int = iota + 1
@@ -209,8 +217,12 @@ const (
 // modInfo is a subset of the deserialised JSON response from the Curse API for mods (addons)
 type modInfo struct {
 	Name                   string        `json:"name"`
+	Summary                string        `json:"summary"`
 	Slug                   string        `json:"slug"`
 	ID                     int           `json:"id"`
+	GameID                 uint32        `json:"gameId"`
+	PrimaryCategoryID      uint32        `json:"primaryCategoryId"`
+	ClassID                uint32        `json:"classId"`
 	LatestFiles            []modFileInfo `json:"latestFiles"`
 	GameVersionLatestFiles []struct {
 		// TODO: check how twitch launcher chooses which one to use, when you are on beta/alpha channel?!
@@ -221,7 +233,11 @@ type modInfo struct {
 		FileType    int    `json:"releaseType"`
 		Modloader   int    `json:"modLoader"`
 	} `json:"latestFilesIndexes"`
-	ModLoaders []string `json:"modLoaders"`
+	ModLoaders           []string `json:"modLoaders"`
+	AllowModDistribution bool     `json:"allowModDistribution"`
+	Links                struct {
+		WebsiteURL string `json:"websiteUrl"`
+	} `json:"links"`
 }
 
 func (c *cfApiClient) getModInfo(modID int) (modInfo, error) {
@@ -277,6 +293,7 @@ func (c *cfApiClient) getModInfoMultiple(modIDs []int) ([]modInfo, error) {
 // modFileInfo is a subset of the deserialised JSON response from the Curse API for mod files
 type modFileInfo struct {
 	ID           int       `json:"id"`
+	ModID        int       `json:"modId"`
 	FileName     string    `json:"fileName"`
 	FriendlyName string    `json:"displayName"`
 	Date         time.Time `json:"fileDate"`
@@ -376,21 +393,34 @@ func (c *cfApiClient) getFileInfoMultiple(fileIDs []int) ([]modFileInfo, error) 
 	return infoRes.Data, nil
 }
 
-func (c *cfApiClient) getSearch(searchText string, gameVersion string, modloaderType int) ([]modInfo, error) {
+func (c *cfApiClient) getSearch(searchTerm string, slug string, gameID int, classID int, categoryID int, gameVersion string, modloaderType int) ([]modInfo, error) {
 	var infoRes struct {
 		Data []modInfo `json:"data"`
 	}
 
 	q := url.Values{}
-	q.Set("gameId", "432") // Minecraft
+	q.Set("gameId", strconv.Itoa(gameID))
 	q.Set("pageSize", "10")
-	q.Set("classId", "6") // Mods
-	q.Set("searchFilter", searchText)
-	if len(gameVersion) > 0 {
-		q.Set("gameVersion", gameVersion)
+	if classID != 0 {
+		q.Set("classId", strconv.Itoa(classID))
 	}
-	if modloaderType != modloaderTypeAny {
-		q.Set("modLoaderType", strconv.Itoa(modloaderType))
+	if slug != "" {
+		q.Set("slug", slug)
+	}
+	// If classID and slug are provided, don't bother filtering by anything else (should be unique)
+	if classID == 0 && slug == "" {
+		if categoryID != 0 {
+			q.Set("categoryId", strconv.Itoa(categoryID))
+		}
+		if searchTerm != "" {
+			q.Set("searchFilter", searchTerm)
+		}
+		if gameVersion != "" {
+			q.Set("gameVersion", gameVersion)
+		}
+		if modloaderType != modloaderTypeAny {
+			q.Set("modLoaderType", strconv.Itoa(modloaderType))
+		}
 	}
 
 	resp, err := c.makeGet("/v1/mods/search?" + q.Encode())
@@ -400,7 +430,74 @@ func (c *cfApiClient) getSearch(searchText string, gameVersion string, modloader
 
 	err = json.NewDecoder(resp.Body).Decode(&infoRes)
 	if err != nil && err != io.EOF {
-		return []modInfo{}, err
+		return []modInfo{}, fmt.Errorf("failed to parse search results: %w", err)
+	}
+
+	return infoRes.Data, nil
+}
+
+//noinspection GoUnusedConst
+const (
+	gameStatusDraft int = iota + 1
+	gameStatusTest
+	gameStatusPendingReview
+	gameStatusRejected
+	gameStatusApproved
+	gameStatusLive
+)
+
+//noinspection GoUnusedConst
+const (
+	gameApiStatusPrivate int = iota + 1
+	gameApiStatusPublic
+)
+
+type cfGame struct {
+	ID        uint32 `json:"id"`
+	Name      string `json:"name"`
+	Slug      string `json:"slug"`
+	Status    int    `json:"status"`
+	APIStatus int    `json:"apiStatus"`
+}
+
+func (c *cfApiClient) getGames() ([]cfGame, error) {
+	var infoRes struct {
+		Data []cfGame `json:"data"`
+	}
+
+	resp, err := c.makeGet("/v1/games")
+	if err != nil {
+		return []cfGame{}, fmt.Errorf("failed to retrieve game list: %w", err)
+	}
+
+	err = json.NewDecoder(resp.Body).Decode(&infoRes)
+	if err != nil && err != io.EOF {
+		return []cfGame{}, fmt.Errorf("failed to parse game list: %w", err)
+	}
+
+	return infoRes.Data, nil
+}
+
+type cfCategory struct {
+	ID      int    `json:"id"`
+	Slug    string `json:"slug"`
+	IsClass bool   `json:"isClass"`
+	ClassID int    `json:"classId"`
+}
+
+func (c *cfApiClient) getCategories(gameID int) ([]cfCategory, error) {
+	var infoRes struct {
+		Data []cfCategory `json:"data"`
+	}
+
+	resp, err := c.makeGet("/v1/categories?gameId=" + strconv.Itoa(gameID))
+	if err != nil {
+		return []cfCategory{}, fmt.Errorf("failed to retrieve category list for game %v: %w", gameID, err)
+	}
+
+	err = json.NewDecoder(resp.Body).Decode(&infoRes)
+	if err != nil && err != io.EOF {
+		return []cfCategory{}, fmt.Errorf("failed to parse category list for game %v: %w", gameID, err)
 	}
 
 	return infoRes.Data, nil

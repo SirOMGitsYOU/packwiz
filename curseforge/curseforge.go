@@ -2,7 +2,12 @@ package curseforge
 
 import (
 	"errors"
+	"fmt"
 	"github.com/spf13/viper"
+	"golang.org/x/exp/slices"
+	"io"
+	"net/http"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -22,12 +27,7 @@ var curseforgeCmd = &cobra.Command{
 func init() {
 	cmd.Add(curseforgeCmd)
 	core.Updaters["curseforge"] = cfUpdater{}
-}
-
-var fileIDRegexes = [...]*regexp.Regexp{
-	regexp.MustCompile("^https?://minecraft\\.curseforge\\.com/projects/(.+)/files/(\\d+)"),
-	regexp.MustCompile("^https?://(?:www\\.)?curseforge\\.com/minecraft/mc-mods/(.+)/files/(\\d+)"),
-	regexp.MustCompile("^https?://(?:www\\.)?curseforge\\.com/minecraft/mc-mods/(.+)/download/(\\d+)"),
+	core.MetaDownloaders["curseforge"] = cfDownloader{}
 }
 
 var snapshotVersionRegex = regexp.MustCompile("(?:Snapshot )?(\\d+)w0?(0|[1-9]\\d*)([a-z])")
@@ -111,57 +111,58 @@ func getCurseforgeVersion(mcVersion string) string {
 	return mcVersion
 }
 
-func getFileIDsFromString(mod string) (bool, int, int, error) {
-	for _, v := range fileIDRegexes {
-		matches := v.FindStringSubmatch(mod)
-		if matches != nil && len(matches) == 3 {
-			modID, err := modIDFromSlug(matches[1])
-			if err != nil {
-				return true, 0, 0, err
-			}
-			fileID, err := strconv.Atoi(matches[2])
-			if err != nil {
-				return true, 0, 0, err
-			}
-			return true, modID, fileID, nil
-		}
-	}
-	return false, 0, 0, nil
+var urlRegexes = [...]*regexp.Regexp{
+	regexp.MustCompile("^https?://(?P<game>minecraft)\\.curseforge\\.com/projects/(?P<slug>[^/]+)(?:/(?:files|download)/(?P<fileID>\\d+))?"),
+	regexp.MustCompile("^https?://(?:www\\.)?curseforge\\.com/(?P<game>[^/]+)/(?P<category>[^/]+)/(?P<slug>[^/]+)(?:/(?:files|download)/(?P<fileID>\\d+))?"),
+	regexp.MustCompile("^(?P<slug>[a-z][\\da-z\\-_]{0,127})$"),
 }
 
-var modSlugRegexes = [...]*regexp.Regexp{
-	regexp.MustCompile("^https?://minecraft\\.curseforge\\.com/projects/([^/]+)"),
-	regexp.MustCompile("^https?://(?:www\\.)?curseforge\\.com/minecraft/mc-mods/([^/]+)"),
-	// Exact slug matcher
-	regexp.MustCompile("^[a-z][\\da-z\\-_]{0,127}$"),
-}
-
-func getModIDFromString(mod string) (bool, int, error) {
-	// Check if it's just a number first
-	modID, err := strconv.Atoi(mod)
-	if err == nil && modID > 0 {
-		return true, modID, nil
-	}
-
-	for _, v := range modSlugRegexes {
-		matches := v.FindStringSubmatch(mod)
+func parseSlugOrUrl(url string) (game string, category string, slug string, fileID int, err error) {
+	for _, r := range urlRegexes {
+		matches := r.FindStringSubmatch(url)
 		if matches != nil {
-			var slug string
-			if len(matches) == 2 {
-				slug = matches[1]
-			} else if len(matches) == 1 {
-				slug = matches[0]
-			} else {
-				continue
+			if i := r.SubexpIndex("game"); i >= 0 {
+				game = matches[i]
 			}
-			modID, err := modIDFromSlug(slug)
-			if err != nil {
-				return true, 0, err
+			if i := r.SubexpIndex("category"); i >= 0 {
+				category = matches[i]
 			}
-			return true, modID, nil
+			if i := r.SubexpIndex("slug"); i >= 0 {
+				slug = matches[i]
+			}
+			if i := r.SubexpIndex("fileID"); i >= 0 {
+				if matches[i] != "" {
+					fileID, err = strconv.Atoi(matches[i])
+				}
+			}
+			return
 		}
 	}
-	return false, 0, nil
+	return
+}
+
+var defaultFolders = map[uint32]map[uint32]string{
+	432: { // Minecraft
+		5:  "plugins", // Bukkit Plugins
+		12: "resourcepacks",
+		6:  "mods",
+		17: "saves",
+	},
+}
+
+func getPathForFile(gameID uint32, classID uint32, categoryID uint32, slug string) string {
+	metaFolder := viper.GetString("meta-folder")
+	if metaFolder == "" {
+		if m, ok := defaultFolders[gameID]; ok {
+			if folder, ok := m[classID]; ok {
+				return filepath.Join(viper.GetString("meta-folder-base"), folder, slug+core.MetaExtension)
+			} else if folder, ok := m[categoryID]; ok {
+				return filepath.Join(viper.GetString("meta-folder-base"), folder, slug+core.MetaExtension)
+			}
+		}
+		metaFolder = "."
+	}
+	return filepath.Join(viper.GetString("meta-folder-base"), metaFolder, slug+core.MetaExtension)
 }
 
 func createModFile(modInfo modInfo, fileInfo modFileInfo, index *core.Index, optionalDisabled bool) error {
@@ -199,11 +200,12 @@ func createModFile(modInfo modInfo, fileInfo modFileInfo, index *core.Index, opt
 			HashFormat: hashFormat,
 			Hash:       hash,
 			URL:        u,
+			Mode:       "metadata:curseforge",
 		},
 		Option: optional,
 		Update: updateMap,
 	}
-	path := modMeta.SetMetaName(modInfo.Slug, *index)
+	path := modMeta.SetMetaPath(getPathForFile(modInfo.GameID, modInfo.ClassID, modInfo.PrimaryCategoryID, modInfo.Slug))
 
 	// If the file already exists, this will overwrite it!!!
 	// TODO: Should this be improved?
@@ -247,22 +249,17 @@ func matchLoaderTypeFileInfo(packLoaderType int, fileInfoData modFileInfo) bool 
 	if packLoaderType == modloaderTypeAny {
 		return true
 	} else {
-		if packLoaderType == modloaderTypeFabric {
-			for _, v := range fileInfoData.GameVersions {
-				if v == "Fabric" {
+		containsLoader := false
+		for i, name := range modloaderNames {
+			if slices.Contains(fileInfoData.GameVersions, name) {
+				containsLoader = true
+				if i == packLoaderType {
 					return true
 				}
 			}
-		} else if packLoaderType == modloaderTypeForge {
-			for _, v := range fileInfoData.GameVersions {
-				if v == "Forge" {
-					return true
-				}
-			}
-		} else {
-			return true
 		}
-		return false
+		// If a file doesn't contain any loaders, it matches all!
+		return !containsLoader
 	}
 }
 
@@ -438,6 +435,7 @@ func (u cfUpdater) DoUpdate(mods []*core.Mod, cachedState []interface{}) error {
 			URL:        u,
 			HashFormat: hashFormat,
 			Hash:       hash,
+			Mode:       "metadata:curseforge",
 		}
 
 		v.Update["curseforge"]["project-id"] = modState.ID
@@ -461,4 +459,122 @@ func parseExportData(from map[string]interface{}) (cfExportData, error) {
 	var exportData cfExportData
 	err := mapstructure.Decode(from, &exportData)
 	return exportData, err
+}
+
+type cfDownloader struct{}
+
+func (c cfDownloader) GetFilesMetadata(mods []*core.Mod) ([]core.MetaDownloaderData, error) {
+	if len(mods) == 0 {
+		return []core.MetaDownloaderData{}, nil
+	}
+
+	downloaderData := make([]core.MetaDownloaderData, len(mods))
+	indexMap := make(map[int]int)
+	projectMetadata := make([]cfUpdateData, len(mods))
+	modIDs := make([]int, len(mods))
+	for i, v := range mods {
+		updateData, ok := v.GetParsedUpdateData("curseforge")
+		if !ok {
+			return nil, fmt.Errorf("failed to read CurseForge update metadata from %s", v.Name)
+		}
+		project := updateData.(cfUpdateData)
+		indexMap[project.ProjectID] = i
+		projectMetadata[i] = project
+		modIDs[i] = project.ProjectID
+	}
+
+	modData, err := cfDefaultClient.getModInfoMultiple(modIDs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get CurseForge mod metadata: %w", err)
+	}
+
+	handleFileInfo := func(modID int, fileInfo modFileInfo) {
+		// If metadata already exists (i.e. opted-out) update it with more metadata
+		if meta, ok := downloaderData[indexMap[modID]].(*cfDownloadMetadata); ok {
+			if meta.noDistribution {
+				meta.websiteUrl = meta.websiteUrl + "/files/" + strconv.Itoa(fileInfo.ID)
+				meta.fileName = fileInfo.FileName
+			}
+		} else {
+			downloaderData[indexMap[modID]] = &cfDownloadMetadata{
+				url: fileInfo.DownloadURL,
+			}
+		}
+	}
+
+	fileIDsToLookup := make([]int, 0)
+	for _, mod := range modData {
+		if _, ok := indexMap[mod.ID]; !ok {
+			return nil, fmt.Errorf("unknown mod ID in response: %v (for %v)", mod.ID, mod.Name)
+		}
+		if !mod.AllowModDistribution {
+			downloaderData[indexMap[mod.ID]] = &cfDownloadMetadata{
+				noDistribution: true, // Inverted so the default value is not this (probably doesn't matter)
+				name:           mod.Name,
+				websiteUrl:     mod.Links.WebsiteURL,
+			}
+		}
+
+		fileID := projectMetadata[indexMap[mod.ID]].FileID
+		fileInfoFound := false
+		// First look in latest files
+		for _, fileInfo := range mod.LatestFiles {
+			if fileInfo.ID == fileID {
+				fileInfoFound = true
+				handleFileInfo(mod.ID, fileInfo)
+				break
+			}
+		}
+
+		if !fileInfoFound {
+			fileIDsToLookup = append(fileIDsToLookup, fileID)
+		}
+	}
+
+	if len(fileIDsToLookup) > 0 {
+		fileData, err := cfDefaultClient.getFileInfoMultiple(fileIDsToLookup)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get CurseForge file metadata: %w", err)
+		}
+		for _, fileInfo := range fileData {
+			if _, ok := indexMap[fileInfo.ModID]; !ok {
+				return nil, fmt.Errorf("unknown mod ID in response: %v from file %v (for %v)", fileInfo.ModID, fileInfo.ID, fileInfo.FileName)
+			}
+			handleFileInfo(fileInfo.ModID, fileInfo)
+		}
+	}
+
+	return downloaderData, nil
+}
+
+type cfDownloadMetadata struct {
+	url            string
+	noDistribution bool
+	name           string
+	fileName       string
+	websiteUrl     string
+}
+
+func (m *cfDownloadMetadata) GetManualDownload() (bool, core.ManualDownload) {
+	if !m.noDistribution {
+		return false, core.ManualDownload{}
+	}
+	return true, core.ManualDownload{
+		Name:     m.name,
+		FileName: m.fileName,
+		URL:      m.websiteUrl,
+	}
+}
+
+func (m *cfDownloadMetadata) DownloadFile() (io.ReadCloser, error) {
+	resp, err := http.Get(m.url)
+	// TODO: content type, user-agent?
+	if err != nil {
+		return nil, fmt.Errorf("failed to download %s: %w", m.url, err)
+	}
+	if resp.StatusCode != 200 {
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("failed to download %s: invalid status code %v", m.url, resp.StatusCode)
+	}
+	return resp.Body, nil
 }

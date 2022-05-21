@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"fmt"
+	"github.com/wafflecoffee/packwiz/core"
+	"github.com/spf13/pflag"
 	"os"
 	"path/filepath"
 
@@ -10,7 +12,6 @@ import (
 )
 
 var packFile string
-var modsFolder string
 var cfgFile string
 
 // rootCmd represents the base command when called without any subcommands
@@ -37,15 +38,29 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&packFile, "pack-file", "pack.toml", "The modpack metadata file to use")
 	_ = viper.BindPFlag("pack-file", rootCmd.PersistentFlags().Lookup("pack-file"))
 
-	rootCmd.PersistentFlags().StringVar(&modsFolder, "mods-folder", "mods", "The default folder to store mod metadata files in")
-	_ = viper.BindPFlag("mods-folder", rootCmd.PersistentFlags().Lookup("mods-folder"))
+	// Make mods-folder an alias for meta-folder
+	viper.RegisterAlias("mods-folder", "meta-folder")
+	rootCmd.SetGlobalNormalizationFunc(func(f *pflag.FlagSet, name string) pflag.NormalizedName {
+		if name == "mods-folder" {
+			return "meta-folder"
+		}
+		return pflag.NormalizedName(name)
+	})
 
-	file, err := os.UserConfigDir()
+	var metaFolder string
+	rootCmd.PersistentFlags().StringVar(&metaFolder, "meta-folder", "", "The folder in which new metadata files will be added, defaulting to a folder based on the category (mods, resourcepacks, etc; if the category is unknown the current directory is used)")
+	_ = viper.BindPFlag("meta-folder", rootCmd.PersistentFlags().Lookup("meta-folder"))
+
+	var metaFolderBase string
+	rootCmd.PersistentFlags().StringVar(&metaFolderBase, "meta-folder-base", ".", "The base folder from which meta-folder will be resolved, defaulting to the current directory (so you can put all mods/etc in a subfolder while still using the default behaviour)")
+	_ = viper.BindPFlag("meta-folder-base", rootCmd.PersistentFlags().Lookup("meta-folder-base"))
+
+	file, err := core.GetPackwizLocalStore()
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
 	}
-	file = filepath.Join(file, "packwiz", ".packwiz.toml")
+	file = filepath.Join(file, ".packwiz.toml")
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "The config file to use (default \""+file+"\")")
 }
 
@@ -55,13 +70,13 @@ func initConfig() {
 		// Use config file from the flag.
 		viper.SetConfigFile(cfgFile)
 	} else {
-		dir, err := os.UserConfigDir()
+		dir, err := core.GetPackwizLocalStore()
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(1)
 		}
 
-		viper.AddConfigPath(filepath.Join(dir, "packwiz"))
+		viper.AddConfigPath(dir)
 		viper.SetConfigName(".packwiz")
 	}
 

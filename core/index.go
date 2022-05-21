@@ -2,6 +2,7 @@ package core
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
@@ -150,16 +151,9 @@ func (in *Index) updateFile(path string) error {
 	}
 
 	mod := false
-	// If the file has an extension of toml and is in the mods folder, set mod to true
-	absFileDir, err := filepath.Abs(filepath.Dir(path))
-	if err == nil {
-		modsDir := filepath.Join(in.GetPackRoot(), viper.GetString("mods-folder"))
-		absModsDir, err := filepath.Abs(modsDir)
-		if err == nil {
-			if absFileDir == absModsDir && strings.HasSuffix(filepath.Base(path), ".toml") {
-				mod = true
-			}
-		}
+	// If the file has an extension of pw.toml, set mod to true
+	if strings.HasSuffix(filepath.Base(path), MetaExtension) {
+		mod = true
 	}
 
 	return in.updateFileHashGiven(path, "sha256", hashString, mod)
@@ -341,7 +335,7 @@ func (in Index) FindMod(modName string) (string, bool) {
 	for _, v := range in.Files {
 		if v.MetaFile {
 			_, file := filepath.Split(v.File)
-			fileTrimmed := strings.TrimSuffix(file, ModExtension)
+			fileTrimmed := strings.TrimSuffix(strings.TrimSuffix(file, MetaExtension), MetaExtensionOld)
 			if fileTrimmed == modName {
 				return filepath.Join(filepath.Dir(in.indexFile), filepath.FromSlash(v.File)), true
 			}
@@ -362,6 +356,20 @@ func (in Index) GetAllMods() []string {
 	return list
 }
 
+// LoadAllMods reads all metadata files into Mod structs
+func (in Index) LoadAllMods() ([]*Mod, error) {
+	modPaths := in.GetAllMods()
+	mods := make([]*Mod, len(modPaths))
+	for i, v := range modPaths {
+		modData, err := LoadMod(v)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read metadata file %s: %w", v, err)
+		}
+		mods[i] = &modData
+	}
+	return mods, nil
+}
+
 // GetFilePath attempts to get the path of the destination index file as it is stored on disk
 func (in Index) GetFilePath(f IndexFile) string {
 	return filepath.Join(filepath.Dir(in.indexFile), filepath.FromSlash(f.File))
@@ -374,6 +382,9 @@ func (in Index) SaveFile(f IndexFile, dest io.Writer) error {
 		hashFormat = in.HashFormat
 	}
 	src, err := os.Open(in.GetFilePath(f))
+	defer func(src *os.File) {
+		_ = src.Close()
+	}(src)
 	if err != nil {
 		return err
 	}
